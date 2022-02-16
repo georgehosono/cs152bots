@@ -1,4 +1,5 @@
 # bot.py
+# first commit
 import discord
 from discord.ext import commands
 import os
