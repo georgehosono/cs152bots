@@ -6,6 +6,7 @@ import json
 import logging
 import re
 import requests
+from unidecode import unidecode
 from report import Report
 
 # Set up logging to the console
@@ -24,7 +25,6 @@ with open(token_path) as f:
     tokens = json.load(f)
     discord_token = tokens['discord']
     perspective_key = tokens['perspective']
-
 
 class ModBot(discord.Client):
     def __init__(self, key):
@@ -64,10 +64,17 @@ class ModBot(discord.Client):
             return
 
         # Check if this message was sent in a server ("guild") or if it's a DM
+        message.content = unidecode(message.content)
         if message.guild:
             await self.handle_channel_message(message)
         else:
             await self.handle_dm(message)
+
+    async def on_message_edit(self, before, after):
+        '''
+        This function is called whenever a message is edited
+        '''
+        await self.handle_channel_message(after)
 
     async def handle_dm(self, message):
         # Handle a help message
