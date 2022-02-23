@@ -1,12 +1,18 @@
 # bot.py
 import discord
 from discord.ext import commands
+#rom google_trans_new import google_translator 
 import os
 import json
 import logging
 import re
 import requests
 from report import Report
+import queue
+
+HARRASMENT_THRESHOLD = 3.40
+MAX_SCORE = 0.98
+reported_messages_queue = queue.Queue(maxsize=50)
 
 # Set up logging to the console
 logger = logging.getLogger('discord')
@@ -98,16 +104,29 @@ class ModBot(discord.Client):
             self.reports.pop(author_id)
 
     async def handle_channel_message(self, message):
-        # Only handle messages sent in the "group-#" channel
-        if not message.channel.name == f'group-{self.group_num}':
-            return
-
-        # Forward the message to the mod channel
-        mod_channel = self.mod_channels[message.guild.id]
-        await mod_channel.send(f'Forwarded message:\n{message.author.name}: "{message.content}"')
-
+        # Handle messages sent in the "group-29" channel
+        if message.channel.name == f'group-{self.group_num}':
+            await self.handle_group_29_channel_message (message)
+        # Handle messages sent in the "group-29-mod" channel
+        elif message.channel.name == f'group-{self.group_num}-mod':
+            await self.handle_group_29_mod_channel_message (message)
+        return
+    
+    async def handle_group_29_channel_message (self, message):
         scores = self.eval_text(message)
-        await mod_channel.send(self.code_format(json.dumps(scores, indent=2)))
+        flag = self.automatic_flagging(scores)
+
+        # If the message is flagged, forward it to the queue of reported messages
+        if flag is True:
+            reported_messages_queue.put(message)
+            #mod_channel = self.mod_channels[message.guild.id]
+            #await mod_channel.send("Added message to queue")
+        return
+
+    def handle_group_29_mod_channel_message (self, message):
+        if message.content.lower() == "review":
+            self.handle_reported_messages(message)
+        return
 
     def eval_text(self, message):
         '''
@@ -137,6 +156,29 @@ class ModBot(discord.Client):
 
     def code_format(self, text):
         return "```" + text + "```"
+
+    async def handle_reported_messages(self, message):
+        if reported_messages_queue.empty() is True:
+            return
+
+        mod_channel = self.mod_channels[message.guild.id]
+        curr_message = reported_messages_queue.get()
+        await mod_channel.send(f'Is "{curr_message.content} \n by user "{curr_message.author.name}" actaully bad?\n')
+        
+    def automatic_flagging(self, scores):
+        severe_toxicity = scores["SEVERE_TOXICITY"]
+        profanity = scores["PROFANITY"]
+        #identity_attack = scores["IDENTITY_ATTACK"]
+        threat = scores["THREAT"]
+        toxicity = scores["TOXICITY"]
+        #flirtation = scores["FLIRTATION"]
+        combined_score = severe_toxicity + profanity + threat + toxicity
+        if combined_score > HARRASMENT_THRESHOLD:
+            return True
+        if severe_toxicity > MAX_SCORE or toxicity > MAX_SCORE or threat > MAX_SCORE:
+            return True
+        return False
+
 
 
 client = ModBot(perspective_key)
