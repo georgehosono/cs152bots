@@ -12,7 +12,8 @@ import queue
 
 HARRASMENT_THRESHOLD = 3.40
 MAX_SCORE = 0.98
-reported_messages_queue = queue.Queue(maxsize=50)
+review_queue = queue.Queue(maxsize=100)
+REVIEW_FLAG = False
 
 # Set up logging to the console
 logger = logging.getLogger('discord')
@@ -114,19 +115,27 @@ class ModBot(discord.Client):
     
     async def handle_group_29_channel_message (self, message):
         scores = self.eval_text(message)
+
+        # Check if the message should be flagged 
         flag = self.automatic_flagging(scores)
 
         # If the message is flagged, forward it to the queue of reported messages
         if flag is True:
-            reported_messages_queue.put(message)
-            #mod_channel = self.mod_channels[message.guild.id]
-            #await mod_channel.send("Added message to queue")
+            review_queue.put(message)
+            mod_channel = self.mod_channels[message.guild.id]
+            await mod_channel.send("Added a flagged message to the queue")
         return
 
-    def handle_group_29_mod_channel_message (self, message):
-        if message.content.lower() == "review":
-            self.handle_reported_messages(message)
-        return
+    async def handle_group_29_mod_channel_message (self, message):
+        # If REVIEW_FLAG is true, then we are in review mode
+        if REVIEW_FLAG == True:
+            await self.moderator_flow(message)
+        # typing review in the mod channel starts review mode
+        elif message.content.lower() == "review":
+            await self.review_messages(message)
+        else:
+            mod_channel = self.mod_channels[message.guild.id]
+            await mod_channel.send("If you like to review flagged messages please type \"review\".")
 
     def eval_text(self, message):
         '''
@@ -157,21 +166,35 @@ class ModBot(discord.Client):
     def code_format(self, text):
         return "```" + text + "```"
 
-    async def handle_reported_messages(self, message):
-        if reported_messages_queue.empty() is True:
+    async def review_messages(self, message):
+        global REVIEW_FLAG
+        mod_channel = self.mod_channels[message.guild.id]
+        if review_queue.empty() == True:
+            await mod_channel.send("There are currently no messages in the queue")
             return
 
+        # Pop the first message off the queue and ask the moderator what they think about the message
+        curr_message = review_queue.get()
+        await mod_channel.send(f'According to company guidelines, should\n"{curr_message.content}" by user "{curr_message.author.name}"\nbe taken down?\n(Answer with \"yes\" or \"no\" only)')
+        REVIEW_FLAG = True
+
+    async def moderator_flow (self, message):
+        global REVIEW_FLAG
         mod_channel = self.mod_channels[message.guild.id]
-        curr_message = reported_messages_queue.get()
-        await mod_channel.send(f'Is "{curr_message.content} \n by user "{curr_message.author.name}" actaully bad?\n')
+        if message.content.lower() == "yes":
+            await mod_channel.send(f'Message:\n"{message.content}" by user "{message.author.name}"\nThis message has been taken down.')
+        # Case where the moderator doesn't type 'yes' or 'no'
+        elif message.content.lower() != "no":
+            await mod_channel.send('Please only answer with \"yes\" or \"no\"')
+            return
+        REVIEW_FLAG = False
+        await mod_channel.send("You have just completed reviewing a message. If you would you like to review another message please type \"review\".")
         
     def automatic_flagging(self, scores):
         severe_toxicity = scores["SEVERE_TOXICITY"]
         profanity = scores["PROFANITY"]
-        #identity_attack = scores["IDENTITY_ATTACK"]
         threat = scores["THREAT"]
         toxicity = scores["TOXICITY"]
-        #flirtation = scores["FLIRTATION"]
         combined_score = severe_toxicity + profanity + threat + toxicity
         if combined_score > HARRASMENT_THRESHOLD:
             return True
