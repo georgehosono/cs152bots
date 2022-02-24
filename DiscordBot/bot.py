@@ -41,7 +41,7 @@ def fact_check(input_claim):
     api_response = requests.get(url=api_endpoint, headers=request_headers)
 
     # Print out the JSON payload the API sent back
-    print(api_response.json()["justification"][0]["truth_rating"])
+    # print(api_response.json()["justification"][0]["truth_rating"])
 
 class ModBot(discord.Client):
     def __init__(self, key):
@@ -89,6 +89,7 @@ class ModBot(discord.Client):
         if message.guild:
             await self.handle_channel_message(message)
         else:
+            # here
             await self.handle_dm(message)
 
     async def on_message_edit(self, before, after):
@@ -137,7 +138,7 @@ class ModBot(discord.Client):
             scores = self.eval_text(message)
             await mod_channel.send(self.code_format(json.dumps(scores, indent=2)))
         elif message.channel.name == f'group-{self.group_num}-mod':
-            if 'Forwarded message:' in message.content:
+            if 'Forwarded message' in message.content:
                 # text = message.content[message.content.find('\"'):]
                 question = await mod_channel.send(f'Does the above message fall into any of the following categories? \n 🔴 Harassment/Bullying \n 🟠 False or Misleading Information \n 🟡 Violence/Graphic Imagery \n 🟢 Spam \n 🔵 Other Harmful Content \n')
                 await question.add_reaction('🔴') 
