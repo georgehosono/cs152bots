@@ -1,4 +1,6 @@
 # bot.py
+from collections import deque
+from email.message import Message
 import discord
 from discord.ext import commands
 import os
@@ -7,6 +9,7 @@ import logging
 import re
 import requests
 from report import Report
+from collections import deque
 
 # Set up logging to the console
 logger = logging.getLogger('discord')
@@ -34,6 +37,10 @@ class ModBot(discord.Client):
         self.mod_channels = {} # Map from guild to the mod channel id for that guild
         self.reports = {} # Map from user IDs to the state of their report
         self.perspective_key = key
+        # ****
+        self.curr_message = discord.Message     # most recent message mods are looking at
+        self.messages_queue = deque()
+        self.points = {} # map from user IDs to points (more points = more reports on their messages)
 
     async def on_ready(self):
         print(f'{self.user.name} has connected to Discord! It is these guilds:')
@@ -59,9 +66,9 @@ class ModBot(discord.Client):
         This function is called whenever a message is sent in a channel that the bot can see (including DMs). 
         Currently the bot is configured to only handle messages that are sent over DMs or in your group's "group-#" channel. 
         '''
-        # Ignore messages from the bot 
-        if message.author.id == self.user.id:
-            return
+        # # Ignore messages from the bot 
+        # if message.author.id == self.user.id:
+        #     return
 
         # Check if this message was sent in a server ("guild") or if it's a DM
         if message.guild:
@@ -97,17 +104,122 @@ class ModBot(discord.Client):
         if self.reports[author_id].report_complete():
             self.reports.pop(author_id)
 
-    async def handle_channel_message(self, message):
-        # Only handle messages sent in the "group-#" channel
-        if not message.channel.name == f'group-{self.group_num}':
+    async def handle_channel_message(self, message):    # CHANGED THIS FUNCTION
+        # Only handle messages sent in the "group-#" channel xxxx
+        mod_channel = self.mod_channels[message.guild.id]
+        if message.channel.name == f'group-{self.group_num}':
+            # Forward the message to the mod channel
+            self.curr_message = message
+            self.messages_queue.append(message)
+            await mod_channel.send(f'Forwarded message:\n{message.author.name}: "{message.content}"')
+
+            scores = self.eval_text(message)
+            await mod_channel.send(self.code_format(json.dumps(scores, indent=2)))
+        elif message.channel.name == f'group-{self.group_num}-mod':
+            if 'Forwarded message:' in message.content:
+                # text = message.content[message.content.find('\"'):]
+                question = await mod_channel.send(f'Does the above message fall into any of the following categories? \n 🔴 Harassment/Bullying \n 🟠 False or Misleading Information \n 🟡 Violence/Graphic Imagery \n 🟢 Spam \n 🔵 Other Harmful Content \n')
+                await question.add_reaction('🔴') 
+                await question.add_reaction('🟠') 
+                await question.add_reaction('🟡') 
+                await question.add_reaction('🟢') 
+                await question.add_reaction('🔵') 
+                
+            # return
+
+        else:
             return
 
-        # Forward the message to the mod channel
-        mod_channel = self.mod_channels[message.guild.id]
-        await mod_channel.send(f'Forwarded message:\n{message.author.name}: "{message.content}"')
+        # # Only handle messages sent in the "group-#" channel
+        # if not message.channel.name == f'group-{self.group_num}':
+        #     return
 
-        scores = self.eval_text(message)
-        await mod_channel.send(self.code_format(json.dumps(scores, indent=2)))
+        # # Forward the message to the mod channel
+        # mod_channel = self.mod_channels[message.guild.id]
+        # await mod_channel.send(f'Forwarded message:\n{message.author.name}: "{message.content}"')
+
+        # scores = self.eval_text(message)
+        # await mod_channel.send(self.code_format(json.dumps(scores, indent=2)))
+
+    async def on_raw_reaction_add(self, payload):
+        channel = await self.fetch_channel(payload.channel_id)
+        message = await channel.fetch_message(payload.message_id)
+        # user_id = await self.fetch_user(payload.user_id)
+        emoji = payload.emoji
+    
+        # if len(self.messages_queue) > 0:
+        
+        # self.messages_queue.popleft()
+
+        mod_channel = self.mod_channels[self.curr_message.guild.id]
+        # mod_channel = self.mod_channels[curr_message_obj.guild.id]
+        if (channel == mod_channel) and payload.user_id != self.user.id:
+            curr_message_obj = self.messages_queue[0]
+            curr_message = curr_message_obj.content
+            author_id = curr_message_obj.author.id
+            if str(emoji) == str('🔴'):
+                # await self.curr_message.add_reaction('🔴')
+                await curr_message_obj.add_reaction('🔴')
+                await mod_channel.send('Thank you! We have tagged this message and will inform the Hate & Harassment Team.')
+                self.messages_queue.popleft()
+            if str(emoji) == str('🟠'):
+                # await self.curr_message.add_reaction('🟠')
+                await curr_message_obj.add_reaction('🟠')
+                question1 = await mod_channel.send(f'Does the message "{curr_message}" contain false or misleading information? \n ✅ Yes \n ❌ No')
+                await question1.add_reaction('✅') 
+                await question1.add_reaction('❌')
+            if str(emoji) == str('🟡'):
+                # await self.curr_message.add_reaction('🟡')
+                await curr_message_obj.add_reaction('🟡')
+                await mod_channel.send('Thank you! We have tagged this message and will will inform the Violence/Graphic Imagery Team.')
+                self.messages_queue.popleft()
+            if str(emoji) == str('🟢'):
+                # await self.curr_message.add_reaction('🟢')
+                await curr_message_obj.add_reaction('🟢')
+                await mod_channel.send('Thank you! We have tagged this message and will will inform the Spam Team.')
+                self.messages_queue.popleft()
+            if str(emoji) == str('🔵'):
+                # await self.curr_message.add_reaction('🔵')
+                await curr_message_obj.add_reaction('🔵')
+                await mod_channel.send('Thank you! We have tagged this message and will will inform the Multidisciplinary Team.')
+                self.messages_queue.popleft()
+            if str(emoji) == str('✅'):
+                question2 = await mod_channel.send(f'Is the message "{curr_message}": \n ⬅️ Fabricated Content / Disinformation, or \n ➡️ Satire / Parody')
+                await question2.add_reaction('⬅️')
+                await question2.add_reaction('➡️')
+            if str(emoji) == str('❌'):
+                await mod_channel.send('Thank you!')
+                self.messages_queue.popleft()
+            if str(emoji) == str('⬅️'):
+                question3 = await mod_channel.send(f'Please rate the harm of the message "{curr_message}": \n 1️⃣ (Immediate Harm) \n 2️⃣ (Moderate Harm) \n 3️⃣ (Low Harm)')
+                await question3.add_reaction('1️⃣') 
+                await question3.add_reaction('2️⃣')
+                await question3.add_reaction('3️⃣')
+            if str(emoji) == str('➡️'):
+                await mod_channel.send('Thank you! We will take action if the issue becomes more serious.')
+                self.messages_queue.popleft()
+            THRESHOLD_POINTS = 50
+            if str(emoji) == str('1️⃣'):
+                # await mod_channel.send(f'message: "{self.curr_message.content}"')
+                # await self.curr_message.delete()
+                await curr_message_obj.delete()
+                await mod_channel.send('Thank you! We have taken down the message.')
+                self.points[author_id] = self.points.get(author_id, 0) + 8
+                self.messages_queue.popleft()
+            if str(emoji) == str('2️⃣'):
+                # await self.curr_message.add_reaction('🚩')
+                await curr_message_obj.add_reaction('🚩')
+                await mod_channel.send('Thank you! We have flagged the message.')
+                self.points[author_id] = self.points.get(author_id, 0) + 5
+                self.messages_queue.popleft()
+            if str(emoji) == str('3️⃣'):
+                await mod_channel.send('Thank you! We will take action if the issue becomes more serious.')
+                self.points[author_id] = self.points.get(author_id, 0) + 2
+                self.messages_queue.popleft()
+            if self.points.get(author_id, 0) > THRESHOLD_POINTS:
+                await mod_channel.send('The author of the message has been banned because they have exceeded the threshold of allowed points for reports against them.')
+
+        # await channel.send("Hello")
 
     def eval_text(self, message):
         '''
