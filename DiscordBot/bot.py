@@ -1,7 +1,7 @@
 # bot.py
 import discord
 from discord.ext import commands
-#rom google_trans_new import google_translator 
+from google_trans_new import google_translator 
 import os
 import json
 import logging
@@ -9,6 +9,8 @@ import re
 import requests
 from report import Report
 import queue
+from unidecode import unidecode
+#from uni2ascii import uni2ascii
 
 HARRASMENT_THRESHOLD = 3.40
 MAX_SCORE = 0.98
@@ -97,7 +99,12 @@ class ModBot(discord.Client):
 
         # Let the report class handle this message; forward all the messages it returns to uss
         responses = await self.reports[author_id].handle_message(message)
-        for r in responses:
+        print(responses)
+        for t in responses:
+            print(t)
+            r, m = tuple(t)
+            if r[0] in ["You have chosen to hard-block the user. Thank you for taking the time to complete this report.", "You have chosen to soft-block the user. Thank you for taking the time to complete this report.", "Thank you for taking the time to complete this report."]:
+                review_queue.put(m)
             await message.channel.send(r)
 
         # If the report is complete or cancelled, remove it from our map
@@ -105,6 +112,8 @@ class ModBot(discord.Client):
             self.reports.pop(author_id)
 
     async def handle_channel_message(self, message):
+        
+        
         # Handle messages sent in the "group-29" channel
         if message.channel.name == f'group-{self.group_num}':
             await self.handle_group_29_channel_message (message)
@@ -114,6 +123,10 @@ class ModBot(discord.Client):
         return
     
     async def handle_group_29_channel_message (self, message):
+        #message.content = unidecode(message.content)
+        message.content = unidecode(message.content)
+        translator = google_translator()
+        message.content = translator.translate(message.content, lang_tgt='en')
         scores = self.eval_text(message)
 
         # Check if the message should be flagged 
@@ -123,7 +136,7 @@ class ModBot(discord.Client):
         if flag is True:
             review_queue.put(message)
             mod_channel = self.mod_channels[message.guild.id]
-            await mod_channel.send("Added a flagged message to the queue")
+            await mod_channel.send('Added a flagged message to the queue')
         return
 
     async def handle_group_29_mod_channel_message (self, message):
@@ -201,7 +214,6 @@ class ModBot(discord.Client):
         if severe_toxicity > MAX_SCORE or toxicity > MAX_SCORE or threat > MAX_SCORE:
             return True
         return False
-
 
 
 client = ModBot(perspective_key)

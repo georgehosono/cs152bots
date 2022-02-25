@@ -2,6 +2,7 @@ from enum import Enum, auto
 import discord
 import re
 
+
 class State(Enum):
     REPORT_START = auto()
     AWAITING_MESSAGE = auto()
@@ -40,6 +41,8 @@ class Report:
         self.client = client
         self.message = None
     
+        self.old_message = None
+
     async def handle_message(self, message):
         '''
         This function makes up the meat of the user-side reporting flow. It defines how we transition between states and what 
@@ -47,9 +50,14 @@ class Report:
         get you started and give you a model for working with Discord. 
         '''
 
+        final_message = self.old_message
+        print("Final message is: ", final_message)
+        if final_message is None:
+            final_message = message
+
         if message.content == self.CANCEL_KEYWORD:
             self.state = State.REPORT_COMPLETE
-            return ["Report cancelled."]
+            return [(["Report cancelled."], final_message)]
         
         if self.state == State.REPORT_START:
             reply =  "Thank you for starting the reporting process. "
@@ -57,78 +65,82 @@ class Report:
             reply += "Please copy paste the link to the message you want to report.\n"
             reply += "You can obtain this link by right-clicking the message and clicking `Copy Message Link`."
             self.state = State.AWAITING_MESSAGE
-            return [reply]
+            return [([reply], final_message)]
         
         if self.state == State.AWAITING_MESSAGE:
             # Parse out the three ID strings from the message link
             m = re.search('/(\d+)/(\d+)/(\d+)', message.content)
             if not m:
-                return ["I'm sorry, I couldn't read that link. Please try again or say `cancel` to cancel."]
+                return [(["I'm sorry, I couldn't read that link. Please try again or say `cancel` to cancel."], final_message)]
             guild = self.client.get_guild(int(m.group(1)))
             if not guild:
-                return ["I cannot accept reports of messages from guilds that I'm not in. Please have the guild owner add me to the guild and try again."]
+                return [(["I cannot accept reports of messages from guilds that I'm not in. Please have the guild owner add me to the guild and try again."], final_message)]
             channel = guild.get_channel(int(m.group(2)))
             if not channel:
-                return ["It seems this channel was deleted or never existed. Please try again or say `cancel` to cancel."]
+                return [(["It seems this channel was deleted or never existed. Please try again or say `cancel` to cancel."], final_message)]
             try:
                 message = await channel.fetch_message(int(m.group(3)))
+                self.old_message = message
+                final_message = message
             except discord.errors.NotFound:
-                return ["It seems this message was deleted or never existed. Please try again or say `cancel` to cancel."]
+                return [(["It seems this message was deleted or never existed. Please try again or say `cancel` to cancel."], final_message)]
 
             # Here we've found the message - it's up to you to decide what to do next!
             self.state = State.MESSAGE_IDENTIFIED
-            return ["I found this message:", "```" + message.author.name + ": " + message.content + "```", \
-                    "Please select the reason for reporting by entering a phrase that most matches the reason for reporting: 'spam', 'offensive content', 'harassment', or 'imminent danger'."]
+            return [(["I found this message:", "```" + message.author.name + ": " + message.content + "```", \
+                    "Please select the reason for reporting by entering a phrase that most matches the reason for reporting: 'spam', 'offensive content', 'harassment', or 'imminent danger'."], final_message)]
 
         if message.content == self.SPAM_KEYWORD or message.content == self.OFFENSE_KEYWORD or message.content == self.SEXUAL_KEYWORD or message.content == self.PRIVATE_KEYWORD or message.content == self.HATE_KEYWORD or message.content == self.NO_KEYWORD:
             reply = "Thank you for reporting. Our content moderator team will review the message and decide on appropriate action. This may include post and/or account removal."
             reply += "Would you like to block the user? Please enter 'block' or 'don't block."
             self.state = State.REPORT_RECORDED
-            return [reply]
+            return [([reply], final_message)]
 
         # if self.state == State.MESSAGE_IDENTIFIED:
         #     return ["<insert rest of reporting flow here>"]
         if message.content == self.HARASSMENT_KEYWORD:
             reply = "Please select type of harassment by entering one of the following: 'threats', 'unwanted sexual content', 'revealing private information', or 'hate speech'."
-            return [reply]
+            return [([reply], final_message)]
 
         if message.content == self.DANGER_KEYWORD:
             reply = "Please select type of danger by entering one of the following: 'sexual abuse', 'self-harm', 'suicidal intent', or 'threat of violence'."
-            return [reply]
+            return [([reply], final_message)]
 
         if message.content == self.THREAT_KEYWORD:
             reply = "Are you a victim of sexual abuse? Please type 'yes' or 'no'."
-            return [reply]
+            return [([reply], final_message)]
 
         if message.content == self.YES_KEYWORD or message.content == self.ABUSE_KEYWORD:
             reply = "Does the content involve someone underage? Please type 'y' for yes and 'n' for no."
-            return [reply]
+            return [([reply], final_message)]
 
         if message.content == self.Y_KEYWORD or message.content == self.N_KEYWORD:
             reply = "Would you like to potentially take legal action? Type 'take legal action' or 'no'."
-            return [reply]
+            return [([reply], final_message)]
 
 
         if message.content == self.NOBLOCK_KEYWORD:
             self.state = State.REPORT_COMPLETE
-            return ["Thank you for taking the time to complete this report."]
+            return [(["Thank you for taking the time to complete this report."], final_message)]
 
         if message.content == self.LEGAL_KEYWORD or message.content == self.HARM_KEYWORD or message.content == self.SUICIDAL_KEYWORD or message.content == self.VIOLENT_KEYWORD:
             reply = "Thank you for reporting. Our content moderator team will review the message and decide on appropriate action, including notifying the authorities if necessary. Our legal team may reach out for further question and next steps."
             reply += "Would you like to block the user? Please enter 'block' or 'don't block."
-            return [reply]
+            return [([reply], final_message)]
 
         if message.content == self.BLOCK_KEYWORD:
             reply = "Please specify how you'd like to block the user by entering 'hard-block' or 'soft-block'."
-            return [reply]
+            return [([reply], final_message)]
 
         if message.content == self.HARD_KEYWORD:
+            self.state = State.REPORT_COMPLETE
             reply = "You have chosen to hard-block the user. Thank you for taking the time to complete this report."
-            return [reply]
+            return [([reply], final_message)]
 
         if message.content == self.SOFT_KEYWORD:
+            self.state = State.REPORT_COMPLETE
             reply = "You have chosen to soft-block the user. Thank you for taking the time to complete this report."
-            return [reply]
+            return [([reply], final_message)]
 
         return []
 
