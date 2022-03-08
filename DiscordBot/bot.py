@@ -1,7 +1,7 @@
 # bot.py
 import discord
 from discord.ext import commands
-from google_trans_new import google_translator 
+from google_trans_new import google_translator
 import os
 import json
 import logging
@@ -10,6 +10,10 @@ import requests
 from report import Report
 import queue
 from unidecode import unidecode
+from nudenet import NudeClassifier
+from PIL import Image
+from io import BytesIO
+
 #from uni2ascii import uni2ascii
 
 HARRASMENT_THRESHOLD = 3.40
@@ -20,8 +24,10 @@ REVIEW_FLAG = False
 # Set up logging to the console
 logger = logging.getLogger('discord')
 logger.setLevel(logging.DEBUG)
-handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
-handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s: %(message)s'))
+handler = logging.FileHandler(
+    filename='discord.log', encoding='utf-8', mode='w')
+handler.setFormatter(logging.Formatter(
+    '%(asctime)s:%(levelname)s:%(name)s: %(message)s'))
 logger.addHandler(handler)
 
 # There should be a file called 'token.json' inside the same folder as this file
@@ -40,8 +46,8 @@ class ModBot(discord.Client):
         intents = discord.Intents.default()
         super().__init__(command_prefix='.', intents=intents)
         self.group_num = None
-        self.mod_channels = {} # Map from guild to the mod channel id for that guild
-        self.reports = {} # Map from user IDs to the state of their report
+        self.mod_channels = {}  # Map from guild to the mod channel id for that guild
+        self.reports = {}  # Map from user IDs to the state of their report
         self.perspective_key = key
 
     async def on_ready(self):
@@ -55,7 +61,8 @@ class ModBot(discord.Client):
         if match:
             self.group_num = match.group(1)
         else:
-            raise Exception("Group number not found in bot's name. Name format should be \"Group # Bot\".")
+            raise Exception(
+                "Group number not found in bot's name. Name format should be \"Group # Bot\".")
 
         # Find the mod channel in each guild that this bot should report to
         for guild in self.guilds:
@@ -68,7 +75,7 @@ class ModBot(discord.Client):
         This function is called whenever a message is sent in a channel that the bot can see (including DMs). 
         Currently the bot is configured to only handle messages that are sent over DMs or in your group's "group-#" channel. 
         '''
-        # Ignore messages from the bot 
+        # Ignore messages from the bot
         if message.author.id == self.user.id:
             return
 
@@ -81,7 +88,7 @@ class ModBot(discord.Client):
     async def handle_dm(self, message):
         # Handle a help message
         if message.content == Report.HELP_KEYWORD:
-            reply =  "Use the `report` command to begin the reporting process.\n"
+            reply = "Use the `report` command to begin the reporting process.\n"
             reply += "Use the `cancel` command to cancel the report process.\n"
             await message.channel.send(reply)
             return
@@ -112,25 +119,44 @@ class ModBot(discord.Client):
             self.reports.pop(author_id)
 
     async def handle_channel_message(self, message):
-        
-        
+
         # Handle messages sent in the "group-29" channel
         if message.channel.name == f'group-{self.group_num}':
-            await self.handle_group_29_channel_message (message)
+            await self.handle_group_29_channel_message(message)
         # Handle messages sent in the "group-29-mod" channel
         elif message.channel.name == f'group-{self.group_num}-mod':
-            await self.handle_group_29_mod_channel_message (message)
+            await self.handle_group_29_mod_channel_message(message)
         return
-    
-    async def handle_group_29_channel_message (self, message):
-        #message.content = unidecode(message.content)
-        message.content = unidecode(message.content)
-        translator = google_translator()
-        message.content = translator.translate(message.content, lang_tgt='en')
-        scores = self.eval_text(message)
 
-        # Check if the message should be flagged 
-        flag = self.automatic_flagging(scores)
+    async def handle_group_29_channel_message(self, message):
+        #message.content = unidecode(message.content)
+
+        flag = False
+        if (len(message.attachments)) == 0:
+            message.content = unidecode(message.content)
+            translator = google_translator()
+            message.content = translator.translate(
+                message.content, lang_tgt='en')
+
+            scores = self.eval_text(message)
+
+            # Check if the message should be flagged
+            flag = self.automatic_flagging(scores)
+        else:  # ML!!!
+            # manage if context.message.attachments is empty
+            image_url = message.attachments[0].url
+            # improve image format detection
+            image_format_jpg = image_url[-3:]
+            image_format_jpeg = image_url[-4:]
+            if image_format_jpg.lower() == 'jpg' or image_format_jpeg.lower() == 'jpeg' or image_format_jpg.lower() == 'png':
+                # try:
+                response = requests.get(image_url)
+                img = Image.open(BytesIO(response.content))
+                img.save('current_img.png')
+                model = NudeClassifier()
+                print(model.classify('current_img.png'))
+                # except Exception as e:
+                #     print("error: " + e.message)
 
         # If the message is flagged, forward it to the queue of reported messages
         if flag is True:
@@ -139,7 +165,7 @@ class ModBot(discord.Client):
             await mod_channel.send('Added a flagged message to the queue')
         return
 
-    async def handle_group_29_mod_channel_message (self, message):
+    async def handle_group_29_mod_channel_message(self, message):
         # If REVIEW_FLAG is true, then we are in review mode
         if REVIEW_FLAG == True:
             await self.moderator_flow(message)
@@ -161,10 +187,10 @@ class ModBot(discord.Client):
             'comment': {'text': message.content},
             'languages': ['en'],
             'requestedAttributes': {
-                                    'SEVERE_TOXICITY': {}, 'PROFANITY': {},
-                                    'IDENTITY_ATTACK': {}, 'THREAT': {},
-                                    'TOXICITY': {}, 'FLIRTATION': {}
-                                },
+                'SEVERE_TOXICITY': {}, 'PROFANITY': {},
+                'IDENTITY_ATTACK': {}, 'THREAT': {},
+                'TOXICITY': {}, 'FLIRTATION': {}
+            },
             'doNotStore': True
         }
         response = requests.post(url, data=json.dumps(data_dict))
@@ -191,7 +217,7 @@ class ModBot(discord.Client):
         await mod_channel.send(f'According to company guidelines, should\n"{curr_message.content}" by user "{curr_message.author.name}"\nbe taken down?\n(Answer with \"yes\" or \"no\" only)')
         REVIEW_FLAG = True
 
-    async def moderator_flow (self, message):
+    async def moderator_flow(self, message):
         global REVIEW_FLAG
         mod_channel = self.mod_channels[message.guild.id]
         if message.content.lower() == "yes":
@@ -202,7 +228,7 @@ class ModBot(discord.Client):
             return
         REVIEW_FLAG = False
         await mod_channel.send("You have just completed reviewing a message. If you would you like to review another message please type \"review\".")
-        
+
     def automatic_flagging(self, scores):
         severe_toxicity = scores["SEVERE_TOXICITY"]
         profanity = scores["PROFANITY"]
