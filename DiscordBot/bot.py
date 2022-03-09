@@ -14,7 +14,36 @@ from nudenet import NudeClassifier
 from PIL import Image
 from io import BytesIO
 
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 #from uni2ascii import uni2ascii
+
+
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.fc1 = nn.Linear(16 * 5 * 5, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 2)
+
+    def forward(self, x):
+        print(x.shape)
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = torch.flatten(x, 1)  # flatten all dimensions except batch
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+
+net = Net()
+net = net.double()
 
 HARRASMENT_THRESHOLD = 3.40
 MAX_SCORE = 0.98
@@ -112,6 +141,8 @@ class ModBot(discord.Client):
             r, m = tuple(t)
             if r[0] in ["You have chosen to hard-block the user. Thank you for taking the time to complete this report.", "You have chosen to soft-block the user. Thank you for taking the time to complete this report.", "Thank you for taking the time to complete this report."]:
                 review_queue.put(m)
+                k = list(self.mod_channels.keys())[0]
+                await self.mod_channels[k].send('Added a flagged message to the queue') # ADDED
             await message.channel.send(r)
 
         # If the report is complete or cancelled, remove it from our map
@@ -149,20 +180,22 @@ class ModBot(discord.Client):
             image_format_jpg = image_url[-3:]
             image_format_jpeg = image_url[-4:]
             if image_format_jpg.lower() == 'jpg' or image_format_jpeg.lower() == 'jpeg' or image_format_jpg.lower() == 'png':
-                # try:
                 response = requests.get(image_url)
                 img = Image.open(BytesIO(response.content))
-                img.save('current_img.png')
-                model = NudeClassifier()
-                print(model.classify('current_img.png'))
-                # except Exception as e:
-                #     print("error: " + e.message)
+                img = img.resize((32, 32))
+                img_arr = np.asarray(img)[:,:,:3]
+                img_arr = img_arr.transpose((2, 0, 1))
+                pred = net(torch.from_numpy(img_arr).double().unsqueeze(0))
+                print(pred.shape)
+                print(pred)
+                if float(pred[0,0]) > float(pred[0,1]):
+                    flag = True
 
         # If the message is flagged, forward it to the queue of reported messages
         if flag is True:
             review_queue.put(message)
             mod_channel = self.mod_channels[message.guild.id]
-            await mod_channel.send('Added a flagged message to the queue')
+            await mod_channel.send('Added a flagged message to the queue. Due to the confidence level in our automated flagging, this post will be taken down.')
         return
 
     async def handle_group_29_mod_channel_message(self, message):
@@ -174,7 +207,7 @@ class ModBot(discord.Client):
             await self.review_messages(message)
         else:
             mod_channel = self.mod_channels[message.guild.id]
-            await mod_channel.send("If you like to review flagged messages please type \"review\".")
+            await mod_channel.send("If you like to review reported messages please type \"review\".")
 
     def eval_text(self, message):
         '''
@@ -214,7 +247,14 @@ class ModBot(discord.Client):
 
         # Pop the first message off the queue and ask the moderator what they think about the message
         curr_message = review_queue.get()
-        await mod_channel.send(f'According to company guidelines, should\n"{curr_message.content}" by user "{curr_message.author.name}"\nbe taken down?\n(Answer with \"yes\" or \"no\" only)')
+        content = ""
+        print(curr_message.attachments)
+        if (len(curr_message.attachments) == 0):
+            content = curr_message.content
+        else:
+            content = curr_message.attachments[0].url
+
+        await mod_channel.send(f'According to company guidelines, should\n"{content}" by user "{curr_message.author.name}"\nbe taken down?\n(Answer with \"yes\" or \"no\" only)')
         REVIEW_FLAG = True
 
     async def moderator_flow(self, message):
