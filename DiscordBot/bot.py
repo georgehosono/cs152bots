@@ -142,7 +142,7 @@ class ModBot(discord.Client):
             if r[0] in ["You have chosen to hard-block the user. Thank you for taking the time to complete this report.", "You have chosen to soft-block the user. Thank you for taking the time to complete this report.", "Thank you for taking the time to complete this report."]:
                 review_queue.put(m)
                 k = list(self.mod_channels.keys())[0]
-                await self.mod_channels[k].send('Added a flagged message to the queue') # ADDED
+                await self.mod_channels[k].send('Added a reported message to the queue') # ADDED
             await message.channel.send(r)
 
         # If the report is complete or cancelled, remove it from our map
@@ -193,7 +193,7 @@ class ModBot(discord.Client):
 
         # If the message is flagged, forward it to the queue of reported messages
         if flag is True:
-            review_queue.put(message)
+            # review_queue.put(message)
             mod_channel = self.mod_channels[message.guild.id]
             await mod_channel.send('Added a flagged message to the queue. Due to the confidence level in our automated flagging, this post will be taken down.')
         return
