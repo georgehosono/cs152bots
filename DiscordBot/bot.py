@@ -10,7 +10,7 @@ import requests
 from report import Report
 import queue
 from unidecode import unidecode
-from nudenet import NudeClassifier
+#from nudenet import NudeClassifier
 from PIL import Image
 from io import BytesIO
 
@@ -49,6 +49,9 @@ HARRASMENT_THRESHOLD = 3.40
 MAX_SCORE = 0.98
 review_queue = queue.Queue(maxsize=100)
 REVIEW_FLAG = False
+REVIEW_STATE = 0
+YES_OR_NO = '(Answer with \"yes\" or \"no\" only)'
+FINISHED_REVIEW = "You have just completed reviewing a message. If you would you like to review another message please type \"review\"."
 
 # Set up logging to the console
 logger = logging.getLogger('discord')
@@ -240,6 +243,7 @@ class ModBot(discord.Client):
 
     async def review_messages(self, message):
         global REVIEW_FLAG
+        global YES_OR_NO
         mod_channel = self.mod_channels[message.guild.id]
         if review_queue.empty() == True:
             await mod_channel.send("There are currently no messages in the queue")
@@ -254,20 +258,60 @@ class ModBot(discord.Client):
         else:
             content = curr_message.attachments[0].url
 
-        await mod_channel.send(f'According to company guidelines, should\n"{content}" by user "{curr_message.author.name}"\nbe taken down?\n(Answer with \"yes\" or \"no\" only)')
+        #await mod_channel.send(f'According to company guidelines, should\n"{content}" by user "{curr_message.author.name}"\nbe taken down?\n(Answer with \"yes\" or \"no\" only)')
+        await mod_channel.send(f'Content: {content}\nUser: {curr_message.author.name}')
+        await mod_channel.send(f'Would this content be considered sexually abusive content based on the company\'s guidlines?\n{YES_OR_NO}')
         REVIEW_FLAG = True
 
     async def moderator_flow(self, message):
         global REVIEW_FLAG
+        global REVIEW_STATE
+        global YES_OR_NO
         mod_channel = self.mod_channels[message.guild.id]
-        if message.content.lower() == "yes":
-            await mod_channel.send(f'Message:\n"{message.content}" by user "{message.author.name}"\nThis message has been taken down.')
-        # Case where the moderator doesn't type 'yes' or 'no'
-        elif message.content.lower() != "no":
-            await mod_channel.send('Please only answer with \"yes\" or \"no\"')
-            return
-        REVIEW_FLAG = False
-        await mod_channel.send("You have just completed reviewing a message. If you would you like to review another message please type \"review\".")
+
+        if (REVIEW_STATE == 0):
+            if message.content.lower() == "yes":
+                await mod_channel.send(f'Content has been taken down.\nDoes this reported content involve someone under 18 years old?\n{YES_OR_NO}')
+                REVIEW_STATE = 1
+            elif message.content.lower() == "no":
+                await mod_channel.send(f'Should this content be taken down for harassmeent, spam, or other offensive content?\n{YES_OR_NO}')
+                REVIEW_STATE = 2
+            else:
+                await mod_channel.send('Please only answer with \"yes\" or \"no\".')
+        elif (REVIEW_STATE == 1):#Content has been taken down.\nDoes this reported content involve someone under 18 years old
+            if message.content.lower() == "yes":
+
+                await mod_channel.send(f'Report to National Center for Missing and Exploited Children.\nDoes the victim want to take legal action?\n{YES_OR_NO}')
+                REVIEW_STATE = 3
+            elif message.content.lower() == "no":
+                await mod_channel.send(f'{FINISHED_REVIEW}')
+                REVIEW_STATE = 0
+                REVIEW_FLAG = False
+            else:
+                await mod_channel.send('Please only answer with \"yes\" or \"no\".')
+        elif (REVIEW_STATE == 2): #Should this content be considered sexually abusive content based on the company\'s guidlines?
+            if message.content.lower() == "yes":
+                await mod_channel.send(f'Content has been taken down.\n{FINISHED_REVIEW}')
+                REVIEW_STATE = 0
+                REVIEW_FLAG = False
+            elif message.content.lower() == "no":
+                await mod_channel.send(f'{FINISHED_REVIEW}')
+                REVIEW_STATE = 0
+                REVIEW_FLAG = False
+            else:
+                await mod_channel.send('Please only answer with \"yes\" or \"no\".')
+        elif (REVIEW_STATE == 3):#Does the victim want to take legal action
+            if message.content.lower() == "yes":
+                await mod_channel.send(f'Send the content to our legal team.\n{FINISHED_REVIEW}')
+                REVIEW_STATE = 0
+                REVIEW_FLAG = False
+            elif message.content.lower() == "no":
+                await mod_channel.send(f'{FINISHED_REVIEW}')
+                REVIEW_STATE = 0
+                REVIEW_FLAG = False
+            else:
+                await mod_channel.send('Please only answer with \"yes\" or \"no\".')
+
 
     def automatic_flagging(self, scores):
         severe_toxicity = scores["SEVERE_TOXICITY"]
