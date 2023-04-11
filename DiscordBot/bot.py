@@ -1,18 +1,65 @@
 # bot.py
 import discord
 from discord.ext import commands
+from google_trans_new import google_translator
 import os
 import json
 import logging
 import re
 import requests
 from report import Report
+import queue
+from unidecode import unidecode
+#from nudenet import NudeClassifier
+from PIL import Image
+from io import BytesIO
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+#from uni2ascii import uni2ascii
+
+
+class Net(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = nn.Conv2d(3, 6, 5)
+        self.pool = nn.MaxPool2d(2, 2)
+        self.conv2 = nn.Conv2d(6, 16, 5)
+        self.fc1 = nn.Linear(16 * 5 * 5, 120)
+        self.fc2 = nn.Linear(120, 84)
+        self.fc3 = nn.Linear(84, 2)
+
+    def forward(self, x):
+        print(x.shape)
+        x = self.pool(F.relu(self.conv1(x)))
+        x = self.pool(F.relu(self.conv2(x)))
+        x = torch.flatten(x, 1)  # flatten all dimensions except batch
+        x = F.relu(self.fc1(x))
+        x = F.relu(self.fc2(x))
+        x = self.fc3(x)
+        return x
+
+
+net = Net()
+net = net.double()
+
+HARRASMENT_THRESHOLD = 3.40
+MAX_SCORE = 0.98
+review_queue = queue.Queue(maxsize=100)
+REVIEW_FLAG = False
+REVIEW_STATE = 0
+YES_OR_NO = '(Answer with \"yes\" or \"no\" only)'
+FINISHED_REVIEW = "You have just completed reviewing a message. If you would you like to review another message please type \"review\"."
 
 # Set up logging to the console
 logger = logging.getLogger('discord')
 logger.setLevel(logging.DEBUG)
-handler = logging.FileHandler(filename='discord.log', encoding='utf-8', mode='w')
-handler.setFormatter(logging.Formatter('%(asctime)s:%(levelname)s:%(name)s: %(message)s'))
+handler = logging.FileHandler(
+    filename='discord.log', encoding='utf-8', mode='w')
+handler.setFormatter(logging.Formatter(
+    '%(asctime)s:%(levelname)s:%(name)s: %(message)s'))
 logger.addHandler(handler)
 
 # There should be a file called 'token.json' inside the same folder as this file
@@ -31,8 +78,8 @@ class ModBot(discord.Client):
         intents = discord.Intents.default()
         super().__init__(command_prefix='.', intents=intents)
         self.group_num = None
-        self.mod_channels = {} # Map from guild to the mod channel id for that guild
-        self.reports = {} # Map from user IDs to the state of their report
+        self.mod_channels = {}  # Map from guild to the mod channel id for that guild
+        self.reports = {}  # Map from user IDs to the state of their report
         self.perspective_key = key
 
     async def on_ready(self):
@@ -46,7 +93,8 @@ class ModBot(discord.Client):
         if match:
             self.group_num = match.group(1)
         else:
-            raise Exception("Group number not found in bot's name. Name format should be \"Group # Bot\".")
+            raise Exception(
+                "Group number not found in bot's name. Name format should be \"Group # Bot\".")
 
         # Find the mod channel in each guild that this bot should report to
         for guild in self.guilds:
@@ -59,7 +107,7 @@ class ModBot(discord.Client):
         This function is called whenever a message is sent in a channel that the bot can see (including DMs). 
         Currently the bot is configured to only handle messages that are sent over DMs or in your group's "group-#" channel. 
         '''
-        # Ignore messages from the bot 
+        # Ignore messages from the bot
         if message.author.id == self.user.id:
             return
 
@@ -72,7 +120,7 @@ class ModBot(discord.Client):
     async def handle_dm(self, message):
         # Handle a help message
         if message.content == Report.HELP_KEYWORD:
-            reply =  "Use the `report` command to begin the reporting process.\n"
+            reply = "Use the `report` command to begin the reporting process.\n"
             reply += "Use the `cancel` command to cancel the report process.\n"
             await message.channel.send(reply)
             return
@@ -90,7 +138,14 @@ class ModBot(discord.Client):
 
         # Let the report class handle this message; forward all the messages it returns to uss
         responses = await self.reports[author_id].handle_message(message)
-        for r in responses:
+        print(responses)
+        for t in responses:
+            print(t)
+            r, m = tuple(t)
+            if r[0] in ["You have chosen to hard-block the user. Thank you for taking the time to complete this report.", "You have chosen to soft-block the user. Thank you for taking the time to complete this report.", "Thank you for taking the time to complete this report."]:
+                review_queue.put(m)
+                k = list(self.mod_channels.keys())[0]
+                await self.mod_channels[k].send('Added a reported message to the queue') # ADDED
             await message.channel.send(r)
 
         # If the report is complete or cancelled, remove it from our map
@@ -98,16 +153,64 @@ class ModBot(discord.Client):
             self.reports.pop(author_id)
 
     async def handle_channel_message(self, message):
-        # Only handle messages sent in the "group-#" channel
-        if not message.channel.name == f'group-{self.group_num}':
-            return
 
-        # Forward the message to the mod channel
-        mod_channel = self.mod_channels[message.guild.id]
-        await mod_channel.send(f'Forwarded message:\n{message.author.name}: "{message.content}"')
+        # Handle messages sent in the "group-29" channel
+        if message.channel.name == f'group-{self.group_num}':
+            await self.handle_group_29_channel_message(message)
+        # Handle messages sent in the "group-29-mod" channel
+        elif message.channel.name == f'group-{self.group_num}-mod':
+            await self.handle_group_29_mod_channel_message(message)
+        return
 
-        scores = self.eval_text(message)
-        await mod_channel.send(self.code_format(json.dumps(scores, indent=2)))
+    async def handle_group_29_channel_message(self, message):
+        #message.content = unidecode(message.content)
+
+        flag = False
+        if (len(message.attachments)) == 0:
+            message.content = unidecode(message.content)
+            translator = google_translator()
+            message.content = translator.translate(
+                message.content, lang_tgt='en')
+
+            scores = self.eval_text(message)
+
+            # Check if the message should be flagged
+            flag = self.automatic_flagging(scores)
+        else:  # ML!!!
+            # manage if context.message.attachments is empty
+            image_url = message.attachments[0].url
+            # improve image format detection
+            image_format_jpg = image_url[-3:]
+            image_format_jpeg = image_url[-4:]
+            if image_format_jpg.lower() == 'jpg' or image_format_jpeg.lower() == 'jpeg' or image_format_jpg.lower() == 'png':
+                response = requests.get(image_url)
+                img = Image.open(BytesIO(response.content))
+                img = img.resize((32, 32))
+                img_arr = np.asarray(img)[:,:,:3]
+                img_arr = img_arr.transpose((2, 0, 1))
+                pred = net(torch.from_numpy(img_arr).double().unsqueeze(0))
+                print(pred.shape)
+                print(pred)
+                if float(pred[0,0]) > float(pred[0,1]):
+                    flag = True
+
+        # If the message is flagged, forward it to the queue of reported messages
+        if flag is True:
+            # review_queue.put(message)
+            mod_channel = self.mod_channels[message.guild.id]
+            await mod_channel.send('Added a flagged message to the queue. Due to the confidence level in our automated flagging, this post will be taken down.')
+        return
+
+    async def handle_group_29_mod_channel_message(self, message):
+        # If REVIEW_FLAG is true, then we are in review mode
+        if REVIEW_FLAG == True:
+            await self.moderator_flow(message)
+        # typing review in the mod channel starts review mode
+        elif message.content.lower() == "review":
+            await self.review_messages(message)
+        else:
+            mod_channel = self.mod_channels[message.guild.id]
+            await mod_channel.send("If you like to review reported messages please type \"review\".")
 
     def eval_text(self, message):
         '''
@@ -120,10 +223,10 @@ class ModBot(discord.Client):
             'comment': {'text': message.content},
             'languages': ['en'],
             'requestedAttributes': {
-                                    'SEVERE_TOXICITY': {}, 'PROFANITY': {},
-                                    'IDENTITY_ATTACK': {}, 'THREAT': {},
-                                    'TOXICITY': {}, 'FLIRTATION': {}
-                                },
+                'SEVERE_TOXICITY': {}, 'PROFANITY': {},
+                'IDENTITY_ATTACK': {}, 'THREAT': {},
+                'TOXICITY': {}, 'FLIRTATION': {}
+            },
             'doNotStore': True
         }
         response = requests.post(url, data=json.dumps(data_dict))
@@ -137,6 +240,90 @@ class ModBot(discord.Client):
 
     def code_format(self, text):
         return "```" + text + "```"
+
+    async def review_messages(self, message):
+        global REVIEW_FLAG
+        global YES_OR_NO
+        mod_channel = self.mod_channels[message.guild.id]
+        if review_queue.empty() == True:
+            await mod_channel.send("There are currently no messages in the queue")
+            return
+
+        # Pop the first message off the queue and ask the moderator what they think about the message
+        curr_message = review_queue.get()
+        content = ""
+        print(curr_message.attachments)
+        if (len(curr_message.attachments) == 0):
+            content = curr_message.content
+        else:
+            content = curr_message.attachments[0].url
+
+        #await mod_channel.send(f'According to company guidelines, should\n"{content}" by user "{curr_message.author.name}"\nbe taken down?\n(Answer with \"yes\" or \"no\" only)')
+        await mod_channel.send(f'Content: {content}\nUser: {curr_message.author.name}')
+        await mod_channel.send(f'Would this content be considered sexually abusive content based on the company\'s guidlines?\n{YES_OR_NO}')
+        REVIEW_FLAG = True
+
+    async def moderator_flow(self, message):
+        global REVIEW_FLAG
+        global REVIEW_STATE
+        global YES_OR_NO
+        mod_channel = self.mod_channels[message.guild.id]
+
+        if (REVIEW_STATE == 0):
+            if message.content.lower() == "yes":
+                await mod_channel.send(f'Content has been taken down.\nDoes this reported content involve someone under 18 years old?\n{YES_OR_NO}')
+                REVIEW_STATE = 1
+            elif message.content.lower() == "no":
+                await mod_channel.send(f'Should this content be taken down for harassmeent, spam, or other offensive content?\n{YES_OR_NO}')
+                REVIEW_STATE = 2
+            else:
+                await mod_channel.send('Please only answer with \"yes\" or \"no\".')
+        elif (REVIEW_STATE == 1):#Content has been taken down.\nDoes this reported content involve someone under 18 years old
+            if message.content.lower() == "yes":
+
+                await mod_channel.send(f'Report to National Center for Missing and Exploited Children.\nDoes the victim want to take legal action?\n{YES_OR_NO}')
+                REVIEW_STATE = 3
+            elif message.content.lower() == "no":
+                await mod_channel.send(f'{FINISHED_REVIEW}')
+                REVIEW_STATE = 0
+                REVIEW_FLAG = False
+            else:
+                await mod_channel.send('Please only answer with \"yes\" or \"no\".')
+        elif (REVIEW_STATE == 2): #Should this content be considered sexually abusive content based on the company\'s guidlines?
+            if message.content.lower() == "yes":
+                await mod_channel.send(f'Content has been taken down.\n{FINISHED_REVIEW}')
+                REVIEW_STATE = 0
+                REVIEW_FLAG = False
+            elif message.content.lower() == "no":
+                await mod_channel.send(f'{FINISHED_REVIEW}')
+                REVIEW_STATE = 0
+                REVIEW_FLAG = False
+            else:
+                await mod_channel.send('Please only answer with \"yes\" or \"no\".')
+        elif (REVIEW_STATE == 3):#Does the victim want to take legal action
+            if message.content.lower() == "yes":
+                await mod_channel.send(f'Send the content to our legal team.\n{FINISHED_REVIEW}')
+                REVIEW_STATE = 0
+                REVIEW_FLAG = False
+            elif message.content.lower() == "no":
+                await mod_channel.send(f'{FINISHED_REVIEW}')
+                REVIEW_STATE = 0
+                REVIEW_FLAG = False
+            else:
+                await mod_channel.send('Please only answer with \"yes\" or \"no\".')
+
+
+    def automatic_flagging(self, scores):
+        severe_toxicity = scores["SEVERE_TOXICITY"]
+        profanity = scores["PROFANITY"]
+        threat = scores["THREAT"]
+        toxicity = scores["TOXICITY"]
+        combined_score = severe_toxicity + profanity + threat + toxicity
+        if combined_score > HARRASMENT_THRESHOLD:
+            return True
+        if severe_toxicity > MAX_SCORE or toxicity > MAX_SCORE or threat > MAX_SCORE:
+            return True
+        return False
 
 
 client = ModBot(perspective_key)
